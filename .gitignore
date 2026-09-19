@@ -1,0 +1,25 @@
+# Data (private or too big for GitHub)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+*.csv
+*.json
+
+# Saved models
+models/*.joblib
+models/*.pkl
+
+# Notebook and Python junk
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# Environments and secrets
+.venv/
+venv/
+.env
+
+# OS and editor files
+.DS_Store
+.vscode/
