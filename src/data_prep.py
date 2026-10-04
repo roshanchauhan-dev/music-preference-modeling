@@ -26,6 +26,17 @@ def build_catalog(datasets,common_cols):
     combined["track_key"] = combined["track_name"] + " - " + combined["artists"]
     return combined
 
+def add_genre_label(df, source_col, label_type):
+    """
+    Adds a unified 'genre_or_language' column plus a 'label_type' column
+    ('genre' or 'language'), so datasets with different label types
+    can be combined without pretending they're the same thing.
+    """
+    df=df.copy()
+    df["genre_or_language"] = df[source_col]
+    df["label_type"] = label_type
+    return df
+
 def match_my_tracks(tracks, catalog):
     """
     Merges personal taste scores against the audio-features catalog.
