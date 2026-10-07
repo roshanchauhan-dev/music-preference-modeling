@@ -22,4 +22,5 @@ venv/
 
 # OS and editor files
 .DS_Store
-.vscode/
+.vscode/.agents/
+.claude/
