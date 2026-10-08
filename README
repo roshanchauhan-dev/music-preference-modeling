@@ -1,0 +1,159 @@
+# Music Preference Modeling
+
+*A machine learning project that models personal music taste from real listening behavior, using clustering, classification, and content-based recommendation.*
+
+## Overview
+
+This project analyzes my own Spotify listening history to understand my music taste and recommend new songs. Rather than relying on explicit ratings, it derives "taste scores" from real listening behavior (play count, completion rate, skip rate), then uses those scores to power a recommendation system and a classifier that predicts whether I'd love or dislike a song based on its audio characteristics.
+
+The project touches unsupervised learning (clustering songs into mood groups), dimensionality reduction (visualizing those groups), supervised classification (predicting preference), and content-based recommendation (cosine similarity), using one real, personal dataset throughout.
+
+## Data Sources
+
+| Spotify Tracks Dataset (Kaggle, maharshipandya) | 114,000 → 79,921 after cleaning | General catalog, Western/English-skewed |
+
+| Spotify Multilingual Dataset (Kaggle, gauthamvijayaraj) | 62,317 → ~42,000 after cleaning | English, Hindi, Tamil, Telugu, Malayalam, Korean |
+
+| Spotify Indian Languages Dataset (Kaggle, gayathripullakhandam) | ~28,800 after cleaning | 15 Indian languages, per-language CSVs |
+
+| **Combined catalog** | **~150,674 songs** | Unified via a reusable cleaning/merging pipeline |
+| My Spotify streaming history | 2021–2026, ~7,183 real plays after cleaning | Extended Streaming History export |
+
+## Project Structure
+music-preference-modeling/
+├── app/
+│ └── streamlit_app.py # Interactive app (search, recommendations, taste profile)
+├── data/
+│ ├── raw/ # Original downloaded datasets (not tracked in git)
+│ └── processed/ # Cleaned/merged outputs (not tracked in git)
+│ ├── full_catalog.csv # Combined audio-features catalog (150k+ songs)
+│ ├── my_taste_scores.csv # My taste score per song, from listening behavior
+│ └── my_matched_songs.csv # My taste scores merged with audio features
+├── notebooks/
+│ ├── 01_eda_and_cleaning.ipynb
+│ ├── 02_clustering.ipynb
+│ ├── 03_recommender.ipynb
+│ ├── 04_my_listening_history.ipynb
+│ ├── 05_merge_datasets.ipynb
+│ └── 06_classification.ipynb
+├── src/
+│ ├── data_prep.py # Reusable cleaning/merging/matching functions
+│ └── recommender.py # Taste profile + similarity functions
+└── reports/figures/ 
+
+
+
+## Methodology
+
+### 1. Data Cleaning (`01_eda_and_cleaning.ipynb`)
+
+Cleaned the base Kaggle dataset: removed nulls, duplicate tracks, and outliers (songs under 1 minute or over 10 minutes, invalid tempo). Explored feature distributions and correlations (energy and loudness are strongly correlated; acousticness and energy are inversely correlated).
+
+### 2. Clustering & Visualization (`02_clustering.ipynb`)
+
+Used K-Means to group songs into mood-based clusters, selecting k=7 using the elbow method and silhouette score. Visualized the clusters with PCA, reducing 9 audio features to 2 dimensions.
+
+**Finding:** Acoustic/calm songs and energetic/danceable songs form the primary axis of separation. Clusters at the extremes (very acoustic, or very high-energy) are cleanly separated; mid-range mood clusters overlap, consistent with modest silhouette scores (~0.20), reflecting that real music exists on a smooth spectrum rather than in hard categories.
+
+![PCA cluster plot](reports/figures/pca_clusters_v2.png)
+
+### 3. Personal Taste Pipeline (`04_my_listening_history.ipynb`, `05_merge_datasets.ipynb`)
+
+Since Spotify doesn't provide explicit like/dislike data, I built a **taste score** from implicit behavior:
+score = 0.4 × play_count (log-normalized) + 0.4 × avg_completion_rate + 0.2 × (1 − skip_rate)
+
+
+**Matching journey:** My listening history is mostly Hindi/Bollywood, and public audio-feature datasets skew heavily Western. I progressively expanded the catalog to improve match rate:
+
+| Step | Match rate |
+|---|---|
+| Original Kaggle dataset only | 11.1% |
+| + Multilingual dataset | 13.3% |
+| + Fuzzy matching (RapidFuzz, title + artist verified separately) | 16.4%→19.1%(iterated) |
+| + Indian Languages dataset (15 languages, 28k songs) | 16.4% |
+
+**Key finding:** Despite tripling the catalog size (80k → 150k+ songs) and adding language-specific datasets, the match rate improved only marginally. This suggests the limiting factor isn't dataset size or language coverage, but **dataset recency** — my listening favors newer, independent/viral artists that pre-built Kaggle snapshots simply don't include, regardless of language. Fuzzy matching was deliberately tuned conservatively (88% similarity + separate title-similarity check) to prioritize label correctness over match quantity, since a small classification dataset is especially sensitive to wrong labels.
+
+Final dataset: **254 of 1,553 songs matched (16.4%)** with real audio features.
+
+### 4. Classification (`06_classification.ipynb`)
+
+**Labels:** built from the taste score using fixed thresholds (score ≥ 0.70 = "love", ≤ 0.54 = "dislike"), dropping the ambiguous middle third for cleaner training signal. Final labeled set: 114 songs (69 dislike / 45 love).
+
+**Models compared**, evaluated with 5-fold cross-validation (not a single train/test split, which can be misleadingly optimistic with small data):
+
+| Model | Mean CV Accuracy | Std Dev |
+|---|---|---|
+| Logistic Regression | 58.2% | ±13.9% |
+| Random Forest (max_depth=5) | 59.1% | ±4.1% |
+
+**Key finding:** A single train/test split initially suggested 77% accuracy for Logistic Regression, but 5-fold cross-validation revealed a more honest ~58%. This is a deliberate illustration of why single splits can mislead with small datasets, and why cross-validation matters. Both models land in a similar, modest range, suggesting the ceiling reflects limits of the data (107–114 labeled songs, audio features only) rather than model choice: factors like lyrics, artist familiarity, or listening context likely also shape taste, and aren't captured by the 9 standard audio features.
+
+**Feature importance** (Random Forest):
+
+| Feature | Importance |
+|---|---|
+| energy | 0.154 |
+| valence | 0.146 |
+| loudness | 0.109 |
+| tempo | 0.106 |
+| acousticness | 0.101 |
+| liveness | 0.099 |
+| danceability | 0.099 |
+| instrumentalness | 0.095 |
+| speechiness | 0.091 |
+
+Energy and valence (mood) are the strongest predictors, consistent with the taste profile independently derived in the recommender (moderate energy, high acousticness, lower valence) — two different methods converging on the same conclusion.
+
+### 5. Recommender System (`03_recommender.ipynb`)
+
+Two complementary recommenders, both using cosine similarity on scaled audio features:
+
+- **Song-to-song search**: given any song, find the most sonically similar tracks in the 150k-song catalog. Supports filtering by genre/language (`same_group` mode) or a blended boost (`boosted` mode).
+- **Personal taste profile**: averages the audio features of my top N most-loved songs into a single "taste vector," then finds catalog songs closest to it — true personalized recommendations, no classifier training required.
+
+Since source datasets label songs differently (Kaggle genre vs. dataset language), a unified `genre_or_language` field with an accompanying `label_type` flag was built to combine them without conflating the two concepts.
+
+### 6. Streamlit App (`app/streamlit_app.py`)
+
+An interactive app with three tabs: search any song for similar tracks, get personalized recommendations from listening history, and view a visual summary of taste (audio feature averages as a bar chart).
+
+```bash
+cd app
+streamlit run streamlit_app.py
+```
+
+## Key Findings
+
+- Clustering reveals a clear acoustic-to-energetic spectrum as the dominant structure in song audio features.
+- Implicit feedback (plays, completion, skips) is a workable substitute for explicit ratings, but is inherently noisier — "low engagement" isn't the same as "actively disliked."
+- Cross-validation is essential with small datasets: a single split overstated accuracy by ~19 percentage points.
+- Audio features alone explain some, but not most, of personal music preference (~58-60% accuracy vs. 50% baseline) — energy and valence (mood) are the strongest signals.
+- Expanding dataset size and language coverage had diminishing, then negligible, returns on personal match rate — recency of the catalog matters more than breadth for this particular listening history.
+
+## Limitations
+
+- **Small labeled sample** (114 songs for classification) limits statistical confidence; wide cross-validation variance reflects this honestly.
+- **Implicit labels**: "dislike" may include songs heard briefly rather than genuinely disliked.
+- **Catalog recency**: public datasets underrepresent newer, independent artists.
+- **Audio features only**: no lyrics, cultural context, or listening-mood data are captured.
+- **Match rate (16.4%)**: most of my personal listening history lacks audio features in any available public dataset.
+
+## Future Work
+
+- **Live upload / v2**: let any user upload their own Spotify JSON export directly in the app, running the full pipeline (clean → taste score → match → recommend) live, rather than relying on a pre-built personal dataset.
+- **Multi-user collaborative filtering**: combine multiple users' taste data to recommend based on similarity between listeners, not just audio features.
+- **Real-time catalog augmentation**: fall back to the Spotify Web API or an artist-average feature proxy for songs missing from the static catalog.
+
+## Tech Stack
+
+Python, pandas, numpy, scikit-learn, matplotlib, seaborn, RapidFuzz, Streamlit
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+# Download datasets listed in Data Sources, place in data/raw/
+# Run notebooks 01 → 06 in order
+cd app && streamlit run streamlit_app.py
+```
